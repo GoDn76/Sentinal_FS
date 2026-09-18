@@ -1,0 +1,24 @@
+[package]
+name = "sentinel-carver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Low-overhead raw disk/image memory mapping
+memmap2 = "0.9.4"
+
+# Dual hashing requirement (Section 63 BSA compliance)
+sha2 = "0.10.8"
+md5 = "0.7.0"
+hex = "0.4.3"
+
+# CLI parsing for orchestrator & vendor flags
+clap = { version = "4.5", features = ["derive"] }
+
+# Evidence manifest serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Forensic timestamps and evidence UUID generation
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }
