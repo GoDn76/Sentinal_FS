@@ -1,24 +1,27 @@
 [package]
 name = "sentinel-carver"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 # Low-overhead raw disk/image memory mapping
-memmap2 = "0.9.4"
+memmap2 = "0.9"
 
-# Dual hashing requirement (Section 63 BSA compliance)
-sha2 = "0.10.8"
-md5 = "0.7.0"
-hex = "0.4.3"
+# Cryptographic hashing (Section 63 BSA compliance)
+sha2 = "0.10"
+md-5 = "0.10"
+hex = "0.4"
 
-# CLI parsing for orchestrator & vendor flags
+# CLI parsing
 clap = { version = "4.5", features = ["derive"] }
 
-# Evidence manifest serialization
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Forensic timestamps and evidence UUID generation
+# Timestamps and UUIDs
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.8", features = ["v4", "serde"] }
+
+# API Client (blocking client for simple agent flow)
+reqwest = { version = "0.12", features = ["multipart", "json", "blocking"] }
