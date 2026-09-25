@@ -5,3 +5,10 @@
 # Ignore target directories in any un-ignored subdirectories
 target/
 test_evidence/
+
+# Local development secrets and generated artifacts
+.env
+venv/
+__pycache__/
+*.pyc
+*.png
