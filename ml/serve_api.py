@@ -26,7 +26,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response, HTMLResponse
 
 # --------------------------------------------------------------------------- config
 
-MODEL_PATH = os.environ.get("FORENSIC_MODEL", "denoiser_inference.pth")
+MODEL_PATH = os.environ.get(
+    "FORENSIC_MODEL",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "denoiser_inference.pth"),
+)
 JOB_ROOT = os.environ.get("FORENSIC_JOB_DIR", os.path.join(tempfile.gettempdir(),
                                                            "forensic_jobs"))
 MAX_UPLOAD_MB = float(os.environ.get("FORENSIC_MAX_UPLOAD_MB", "200"))

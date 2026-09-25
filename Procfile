@@ -1,2 +1,1 @@
-web: python serve_api.py
-have yu
+web: python ml/serve_api.py

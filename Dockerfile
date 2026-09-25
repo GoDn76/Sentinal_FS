@@ -33,11 +33,11 @@ RUN python -c "import cv2, mediapipe, torch, numpy; print('cv2', cv2.__version__
 
 COPY . .
 
-# serve_api.py defaults to ./denoiser_inference.pth; stated explicitly here so
-# the path does not depend on the working directory.
-ENV FORENSIC_MODEL=/app/denoiser_inference.pth
+# serve_api.py lives in ml/ and defaults to the checkpoint beside it; state the
+# path explicitly for deployments that override the process working directory.
+ENV FORENSIC_MODEL=/app/ml/denoiser_inference.pth
 
 # Cosmetic on Railway -- serve_api.py binds 0.0.0.0:$PORT, which Railway injects.
 EXPOSE 8000
 
-CMD ["python", "serve_api.py"]
+CMD ["python", "ml/serve_api.py"]
