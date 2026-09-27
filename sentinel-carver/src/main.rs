@@ -158,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|s| cli.output_dir.join(&s.filename))
             .collect();
 
-        match upload_evidence(upload_url, &manifest_path, &segment_paths) {
+        match upload_evidence(upload_url, &manifest_path, &segment_paths, None) {
             Ok(_) => {
                 audit_ledger.log("UPLOAD_COMPLETE", "Upload succeeded with HTTP 200 OK")?;
                 println!("[SUCCESS] Evidence package successfully ingested by API.");

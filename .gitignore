@@ -5,3 +5,15 @@
 # Ignore target directories in any un-ignored subdirectories
 target/
 test_evidence/
+.env
+.env.local
+.venv/
+node_modules/
+build_dahua_disk.py
+build_hikvision_disk.py
+carving_test_dahua.py
+fake_disk.raw
+my_Video.mp4
+output.h264
+output.mp4
+recovered_dahua.dav

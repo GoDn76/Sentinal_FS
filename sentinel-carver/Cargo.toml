@@ -3,6 +3,14 @@ name = "sentinel-carver"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "sentinel_carver"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sentinel-carver"
+path = "src/main.rs"
+
 [dependencies]
 # Low-overhead raw disk/image memory mapping
 memmap2 = "0.9"

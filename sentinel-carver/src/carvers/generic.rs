@@ -64,9 +64,9 @@ impl Carver for GenericCarver {
             while current_pos < mmap.len() {
                 match Self::find_next_start_code(mmap, current_pos + 4) {
                     Some((next_start, _prefix_len)) => {
-                        let nal_len = next_start - current_pos;
+                        let _nal_len = next_start - current_pos;
 
-                        // Check gap size: bytes between current_pos and next_start
+                        // Write chunk to output unconditionally (it's a valid NAL boundary hit)
                         let chunk = &mmap[current_pos..next_start];
                         writer.write_all(chunk)?;
                         hasher.update(chunk);
@@ -78,12 +78,6 @@ impl Carver for GenericCarver {
                         };
                         if unit_type == 1 || unit_type == 5 {
                             frame_count += 1;
-                        }
-
-                        // Stream Termination: gap > 4096 bytes without valid NAL start code
-                        if nal_len > 4096 + 65536 {
-                            current_pos = next_start;
-                            break;
                         }
 
                         current_pos = next_start;
@@ -107,7 +101,7 @@ impl Carver for GenericCarver {
 
             segments.push(CarvedSegment {
                 filename,
-                camera_channel: 1,
+                camera_channel: 0,
                 tier_used: "Generic (Annex B)".to_string(),
                 byte_offset_start,
                 byte_offset_end,

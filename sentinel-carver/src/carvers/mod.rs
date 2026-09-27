@@ -5,6 +5,7 @@ pub mod hikvision;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CarvedSegment {
     pub filename:            String,
+    // camera_channel: 0 = unknown (Generic/Hikvision), 1+ = specific channel (Dahua)
     pub camera_channel:      u8,
     pub tier_used:           String,
     pub byte_offset_start:   usize,

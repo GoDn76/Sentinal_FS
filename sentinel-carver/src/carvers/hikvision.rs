@@ -162,12 +162,12 @@ impl Carver for HikvisionCarver {
             let (sha256, md5) = hasher.finalize();
             let byte_offset_end = current_pos;
 
-            let timestamp_start = first_scr.map(|s| format!("SCR:{}", s));
-            let timestamp_end = last_scr.map(|s| format!("SCR:{}", s));
+            let timestamp_start = first_scr.map(|s| format!("SCR_MS:{}", s / 90));
+            let timestamp_end   = last_scr.map(|s| format!("SCR_MS:{}", s / 90));
 
             segments.push(CarvedSegment {
                 filename,
-                camera_channel: 1,
+                camera_channel: 0,
                 tier_used: "Hikvision".to_string(),
                 byte_offset_start,
                 byte_offset_end,

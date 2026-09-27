@@ -119,7 +119,8 @@ impl Carver for DahuaCarver {
                                 timestamp_last: timestamp_str.clone(),
                             },
                         );
-                        streams.get_mut(&channel_id).unwrap()
+                        streams.get_mut(&channel_id)
+                            .ok_or("Failed to retrieve stream after insert")?
                     }
                 };
 

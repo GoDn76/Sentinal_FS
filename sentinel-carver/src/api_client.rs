@@ -7,6 +7,7 @@ pub fn upload_evidence(
     api_url:       &str,
     manifest_path: &Path,
     segment_paths: &[PathBuf],
+    bearer_token:  Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut form = Form::new();
 
@@ -34,7 +35,11 @@ pub fn upload_evidence(
 
     let target_url = format!("{}/api/v1/evidence/ingest", api_url.trim_end_matches('/'));
     let client = Client::new();
-    let response = client.post(&target_url).multipart(form).send()?;
+    let mut request = client.post(&target_url).multipart(form);
+    if let Some(token) = bearer_token {
+        request = request.bearer_auth(token);
+    }
+    let response = request.send()?;
 
     if !response.status().is_success() {
         let status = response.status();
