@@ -5,6 +5,7 @@
 # Ignore target directories in any un-ignored subdirectories
 target/
 test_evidence/
+<<<<<<< HEAD
 .env
 .env.local
 .venv/
@@ -17,3 +18,12 @@ my_Video.mp4
 output.h264
 output.mp4
 recovered_dahua.dav
+=======
+
+# Local development secrets and generated artifacts
+.env
+venv/
+__pycache__/
+*.pyc
+*.png
+>>>>>>> 0597b05d9420680e5981994efe19af5398ac320b
