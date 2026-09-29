@@ -10,6 +10,7 @@ import type { FileHashResult, VideoProbeResult, CarvedSegmentUI } from '../types
 
 interface ProcessedFile {
   path: string;
+  previewPath: string | null;
   hash: FileHashResult | null;
   probe: VideoProbeResult | null;
   isLoading: boolean;
@@ -37,6 +38,7 @@ export const ManualUpload: React.FC = () => {
       const paths = Array.isArray(selected) ? selected : [selected];
       const newEntries: ProcessedFile[] = paths.map((p) => ({
         path: p,
+        previewPath: null,
         hash: null,
         probe: null,
         isLoading: true,
@@ -56,6 +58,7 @@ export const ManualUpload: React.FC = () => {
   const processFile = async (filePath: string) => {
     let hashRes: FileHashResult | null = null;
     let probeRes: VideoProbeResult | null = null;
+    let previewPath: string | null = null;
 
     try {
       hashRes = await api.hashFile(filePath);
@@ -69,10 +72,16 @@ export const ManualUpload: React.FC = () => {
       console.warn('Probe notice:', e);
     }
 
+    try {
+      previewPath = await api.prepareVideoPreview(filePath);
+    } catch (e: unknown) {
+      console.warn('Video preview conversion notice:', e);
+    }
+
     setFiles((prev) =>
       prev.map((f) =>
         f.path === filePath
-          ? { ...f, hash: hashRes, probe: probeRes, isLoading: false }
+          ? { ...f, hash: hashRes, probe: probeRes, previewPath, isLoading: false }
           : f
       )
     );
@@ -87,9 +96,6 @@ export const ManualUpload: React.FC = () => {
       .filter((f) => f.hash !== null)
       .map((f) => {
         const filename = f.path.split(/[/\\]/).pop() || f.path;
-        const ext = filename.split('.').pop()?.toLowerCase() || '';
-        const canPreview = ['mp4', 'mkv', 'avi', 'h264'].includes(ext);
-
         return {
           filename,
           camera_channel: 0,
@@ -102,7 +108,8 @@ export const ManualUpload: React.FC = () => {
           is_deleted: false,
           size_bytes: f.hash!.size_bytes,
           local_path: f.path,
-          can_preview: canPreview,
+          preview_path: f.previewPath,
+          can_preview: !!f.previewPath,
           source: 'manual',
         };
       });

@@ -35,6 +35,10 @@ struct Cli {
     #[arg(short, long)]
     vendor: Option<String>,
 
+    /// Optional Case ID to bind evidence manifest to
+    #[arg(short, long)]
+    case_id: Option<String>,
+
     /// Operator name for chain of custody record
     #[arg(long, default_value = "Forensic Operator")]
     operator: String,
@@ -131,9 +135,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
 
-    // 8. Build EvidenceManifest and save to manifest.json
     let manifest_path = cli.output_dir.join("manifest.json");
+    let target_case_id = cli.case_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let manifest = EvidenceManifest::new(
+        target_case_id,
         cli.input.to_string_lossy().to_string(),
         source_sha256.clone(),
         source_md5.clone(),
@@ -159,9 +164,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
 
         match upload_evidence(upload_url, &manifest_path, &segment_paths, None) {
-            Ok(_) => {
+            Ok(uploaded_case_id) => {
                 audit_ledger.log("UPLOAD_COMPLETE", "Upload succeeded with HTTP 200 OK")?;
-                println!("[SUCCESS] Evidence package successfully ingested by API.");
+                println!("[SUCCESS] Evidence package ingested for case {}.", uploaded_case_id);
             }
             Err(e) => {
                 audit_ledger.log("UPLOAD_FAILED", &format!("Error: {}", e))?;

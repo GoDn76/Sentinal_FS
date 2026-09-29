@@ -66,6 +66,7 @@ pub struct CarvedSegmentUI {
     pub is_deleted: bool,
     pub size_bytes: u64,
     pub local_path: String,
+    pub preview_path: Option<String>,
     pub can_preview: bool,
     pub source: String, // "carved" | "manual"
 }
@@ -93,6 +94,7 @@ pub struct UploadResult {
     pub case_url: String,
     pub segments_uploaded: u32,
     pub upload_duration_sec: f64,
+    pub local_cleanup_complete: bool,
 }
 
 #[tauri::command]
@@ -283,17 +285,24 @@ pub async fn start_carving(
 
     // Locate sentinel-carver binary
     let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let carver_bin = resource_dir.join("binaries").join("sentinel-carver");
-    let carver_bin_exe = carver_bin.with_extension("exe");
+    let candidate_paths = vec![
+        resource_dir.join("binaries").join("sentinel-carver.exe"),
+        resource_dir.join("binaries").join("sentinel-carver"),
+        PathBuf::from("../sentinel-carver/target/release/sentinel-carver.exe"),
+        PathBuf::from("../sentinel-carver/target/debug/sentinel-carver.exe"),
+        PathBuf::from("../../sentinel-carver/target/release/sentinel-carver.exe"),
+        PathBuf::from("../../sentinel-carver/target/debug/sentinel-carver.exe"),
+        PathBuf::from("sentinel-carver/target/release/sentinel-carver.exe"),
+        PathBuf::from("sentinel-carver/target/debug/sentinel-carver.exe"),
+        PathBuf::from("./sentinel-carver.exe"),
+        PathBuf::from("sentinel-carver.exe"),
+        PathBuf::from("sentinel-carver"),
+    ];
 
-    let bin_to_run = if carver_bin.exists() {
-        carver_bin
-    } else if carver_bin_exe.exists() {
-        carver_bin_exe
-    } else {
-        // Fallback to sentinel-carver binary built in target/debug or PATH
-        PathBuf::from("sentinel-carver")
-    };
+    let bin_to_run = candidate_paths
+        .into_iter()
+        .find(|p| p.exists())
+        .unwrap_or_else(|| PathBuf::from("sentinel-carver"));
 
     let job_id_clone = job_id.clone();
     let output_dir_clone = output_dir.clone();
@@ -303,6 +312,7 @@ pub async fn start_carving(
         cmd.arg("--input").arg(&input_path);
         cmd.arg("--output-dir").arg(&output_dir_clone);
         cmd.arg("--operator").arg(&operator);
+        cmd.arg("--case-id").arg(&_case_id);
 
         if let Some(hint) = vendor_hint {
             if !hint.is_empty() {
@@ -327,7 +337,7 @@ pub async fn start_carving(
                         if let Some(p) = jobs.get_mut(&job_id_clone) {
                             p.current_action = line.clone();
                             p.bytes_scanned = scanned;
-                            if line.contains("SEGMENT_CARVED") {
+                            if line.contains("SEGMENT_CARVED") || line.contains("Segments Carved:") {
                                 p.segments_found += 1;
                             }
                         }
@@ -341,7 +351,22 @@ pub async fn start_carving(
                         Ok(s) if s.success() => {
                             p.status = "complete".into();
                             p.bytes_scanned = input_size;
-                            p.current_action = "Carving complete. Manifest sealed.".into();
+                            p.current_action = "Carving complete. Original evidence is preserved.".into();
+
+                            let manifest_path = Path::new(&output_dir_clone).join("manifest.json");
+                            if manifest_path.exists() {
+                                if let Ok(file) = File::open(&manifest_path) {
+                                    if let Ok(manifest_val) = serde_json::from_reader::<_, serde_json::Value>(file) {
+                                        let count = manifest_val
+                                            .get("carved_segments")
+                                            .or_else(|| manifest_val.get("segments"))
+                                            .and_then(|segments| segments.as_array())
+                                            .map(Vec::len)
+                                            .unwrap_or(0);
+                                        p.segments_found = count as u32;
+                                    }
+                                }
+                            }
                         }
                         Ok(s) => {
                             p.status = "error".into();
@@ -377,8 +402,118 @@ pub fn get_carving_progress(job_id: String) -> Result<CarvingProgress, String> {
     }
 }
 
+fn resolve_media_binary(app: &tauri::AppHandle, binary_name: &str) -> Result<PathBuf, String> {
+    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let extension = std::env::consts::EXE_EXTENSION;
+    let executable_name = if extension.is_empty() {
+        binary_name.to_string()
+    } else {
+        format!("{}.{}", binary_name, extension)
+    };
+    let target_executable = if cfg!(windows) {
+        format!("{}-x86_64-pc-windows-msvc.{}", binary_name, extension)
+    } else {
+        executable_name.clone()
+    };
+
+    let mut candidates = vec![
+        resource_dir.join("binaries").join(&target_executable),
+        resource_dir.join("binaries").join(&executable_name),
+        resource_dir.join(&target_executable),
+        resource_dir.join(&executable_name),
+    ];
+    if let Ok(executable_path) = std::env::current_exe() {
+        if let Some(executable_dir) = executable_path.parent() {
+            candidates.push(executable_dir.join("binaries").join(&target_executable));
+            candidates.push(executable_dir.join("binaries").join(&executable_name));
+        }
+    }
+    candidates.push(PathBuf::from(binary_name));
+
+    for candidate in candidates {
+        let Ok(output) = StdCommand::new(&candidate).arg("-version").output() else {
+            continue;
+        };
+        let version = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .to_lowercase();
+        if output.status.success() && version.contains(&format!("{} version", binary_name)) {
+            return Ok(candidate);
+        }
+    }
+
+    Err(format!("A working {} executable was not found", binary_name))
+}
+
+fn create_video_preview(
+    app: &tauri::AppHandle,
+    source_path: &Path,
+    output_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    let extension = source_path.extension().and_then(|value| value.to_str()).unwrap_or("").to_lowercase();
+    if !matches!(extension.as_str(), "264" | "avi" | "dav" | "h264" | "mkv" | "mov" | "mp4" | "mpeg" | "mpg" | "webm") {
+        return None;
+    }
+
+    let stem = source_path.file_stem().and_then(|value| value.to_str()).unwrap_or("evidence");
+    let source_metadata = source_path.metadata().ok()?;
+    let source_identity = format!(
+        "{}:{}:{:?}",
+        source_path.canonicalize().ok()?.display(),
+        source_metadata.len(),
+        source_metadata.modified().ok()?
+    );
+    let mut identity_hash = Sha256::new();
+    identity_hash.update(source_identity.as_bytes());
+    let identity = hex::encode(identity_hash.finalize());
+    let preview_dir = match output_dir {
+        Some(directory) => directory.to_path_buf(),
+        None => app.path().app_cache_dir().ok()?,
+    };
+    fs::create_dir_all(&preview_dir).ok()?;
+    let preview_path = preview_dir.join(format!("{}-{}.playback.mp4", stem, &identity[..16]));
+    if !preview_path.is_file() {
+        let Ok(ffmpeg_bin) = resolve_media_binary(app, "ffmpeg") else {
+            return None;
+        };
+
+        let output = StdCommand::new(ffmpeg_bin)
+            .args([
+                "-hide_banner", "-loglevel", "error", "-y", "-i",
+                source_path.to_str().unwrap_or(""), "-map", "0:v:0", "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-movflags", "+faststart",
+                preview_path.to_str().unwrap_or(""),
+            ])
+            .output();
+
+        if !output.map(|result| result.status.success()).unwrap_or(false)
+            || !preview_path.is_file()
+            || fs::metadata(&preview_path).map(|metadata| metadata.len() == 0).unwrap_or(true)
+        {
+            let _ = fs::remove_file(&preview_path);
+            return None;
+        }
+    }
+
+    Some(preview_path)
+}
+
 #[tauri::command]
-pub fn get_carved_segments(output_dir: String) -> Result<Vec<CarvedSegmentUI>, String> {
+pub fn prepare_video_preview(app: tauri::AppHandle, file_path: String) -> Result<Option<String>, String> {
+    let source_path = Path::new(&file_path);
+    if !source_path.is_file() {
+        return Err(format!("Video file not found: {}", file_path));
+    }
+    Ok(create_video_preview(&app, source_path, None)
+        .map(|preview_path| preview_path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub fn get_carved_segments(app: tauri::AppHandle, output_dir: String) -> Result<Vec<CarvedSegmentUI>, String> {
     let dir = Path::new(&output_dir);
     let manifest_path = dir.join("manifest.json");
 
@@ -390,19 +525,16 @@ pub fn get_carved_segments(output_dir: String) -> Result<Vec<CarvedSegmentUI>, S
     let manifest_json: serde_json::Value = serde_json::from_reader(file).map_err(|e| e.to_string())?;
 
     let mut ui_segments = Vec::new();
+    let raw_segments = manifest_json.get("carved_segments")
+        .or_else(|| manifest_json.get("segments"));
 
-    if let Some(segments) = manifest_json["segments"].as_array() {
+    if let Some(segments) = raw_segments.and_then(|s| s.as_array()) {
         for seg in segments {
             let filename = seg["filename"].as_str().unwrap_or("").to_string();
-            let local_path = dir.join(&filename).to_string_lossy().to_string();
-            let ext = Path::new(&filename)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-
-            let can_preview = matches!(ext.as_str(), "mp4" | "mkv" | "avi" | "h264");
-            let size_bytes = fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
+            let source_path = dir.join(&filename);
+            let preview_path = create_video_preview(&app, &source_path, Some(dir));
+            let can_preview = preview_path.is_some();
+            let size_bytes = fs::metadata(&source_path).map(|metadata| metadata.len()).unwrap_or(0);
 
             ui_segments.push(CarvedSegmentUI {
                 filename,
@@ -415,7 +547,8 @@ pub fn get_carved_segments(output_dir: String) -> Result<Vec<CarvedSegmentUI>, S
                 frame_count: seg["frame_count"].as_u64().unwrap_or(0) as u32,
                 is_deleted: seg["is_deleted"].as_bool().unwrap_or(false),
                 size_bytes,
-                local_path,
+                local_path: source_path.to_string_lossy().to_string(),
+                preview_path: preview_path.map(|path| path.to_string_lossy().to_string()),
                 can_preview,
                 source: "carved".into(),
             });
@@ -466,17 +599,7 @@ pub async fn probe_video(app: tauri::AppHandle, file_path: String) -> Result<Vid
         return Err(format!("File not found: {}", file_path));
     }
 
-    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let ffprobe_bin = resource_dir.join("binaries").join("ffprobe");
-    let ffprobe_bin_exe = ffprobe_bin.with_extension("exe");
-
-    let bin_to_run = if ffprobe_bin.exists() {
-        ffprobe_bin
-    } else if ffprobe_bin_exe.exists() {
-        ffprobe_bin_exe
-    } else {
-        PathBuf::from("ffprobe")
-    };
+    let bin_to_run = resolve_media_binary(&app, "ffprobe")?;
 
     let output = StdCommand::new(&bin_to_run)
         .args([
@@ -549,17 +672,7 @@ pub async fn extract_preview_thumbnail(app: tauri::AppHandle, file_path: String)
         return Err(format!("File not found: {}", file_path));
     }
 
-    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let ffmpeg_bin = resource_dir.join("binaries").join("ffmpeg");
-    let ffmpeg_bin_exe = ffmpeg_bin.with_extension("exe");
-
-    let bin_to_run = if ffmpeg_bin.exists() {
-        ffmpeg_bin
-    } else if ffmpeg_bin_exe.exists() {
-        ffmpeg_bin_exe
-    } else {
-        PathBuf::from("ffmpeg")
-    };
+    let bin_to_run = resolve_media_binary(&app, "ffmpeg")?;
 
     let output = StdCommand::new(&bin_to_run)
         .args([
@@ -582,50 +695,140 @@ pub async fn extract_preview_thumbnail(app: tauri::AppHandle, file_path: String)
 
 #[tauri::command]
 pub async fn upload_evidence(
+    app: tauri::AppHandle,
     manifest_path: String,
     output_dir: String,
     api_base_url: String,
     platform_jwt: String,
+    case_id: String,
+    case_reference: String,
+    segments: Vec<CarvedSegmentUI>,
 ) -> Result<UploadResult, String> {
-    let manifest_p = Path::new(&manifest_path);
-    if !manifest_p.exists() {
-        return Err(format!("Manifest file not found: {}", manifest_path));
+    if segments.is_empty() {
+        return Err("No evidence segments were selected for upload".into());
     }
 
     let start_time = Instant::now();
+    let resolved_output_dir = if output_dir.trim().is_empty() {
+        dirs::data_local_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("SentinelFS")
+            .join(&case_id)
+    } else {
+        PathBuf::from(&output_dir)
+    };
+    fs::create_dir_all(&resolved_output_dir).map_err(|e| e.to_string())?;
 
-    let file = File::open(manifest_p).map_err(|e| e.to_string())?;
-    let manifest_json: serde_json::Value = serde_json::from_reader(file).map_err(|e| e.to_string())?;
+    let requested_manifest = PathBuf::from(&manifest_path);
+    let manifest_p = if !manifest_path.trim().is_empty() && requested_manifest.is_file() {
+        requested_manifest
+    } else {
+        resolved_output_dir.join("manifest.json")
+    };
+    let mut manifest_json: serde_json::Value = if manifest_p.is_file() {
+        let file = File::open(&manifest_p).map_err(|e| e.to_string())?;
+        serde_json::from_reader(file).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+    manifest_json["case_id"] = serde_json::json!(case_id);
+    if !case_reference.trim().is_empty() {
+        manifest_json["case_reference"] = serde_json::json!(case_reference);
+    }
 
-    let mut segment_paths = Vec::new();
-    if let Some(segments) = manifest_json["segments"].as_array() {
-        for seg in segments {
-            if let Some(fname) = seg["filename"].as_str() {
-                segment_paths.push(Path::new(&output_dir).join(fname));
+    let mut segment_paths = Vec::with_capacity(segments.len());
+    let mut manifest_segments = Vec::with_capacity(segments.len());
+    for segment in &segments {
+        let segment_path = PathBuf::from(&segment.local_path);
+        if !segment_path.is_file() {
+            return Err(format!("Evidence file not found: {}", segment.local_path));
+        }
+        let source_hash = hash_file(segment.local_path.clone()).await?;
+        if !segment.sha256.is_empty() && !segment.sha256.eq_ignore_ascii_case(&source_hash.sha256) {
+            return Err(format!("Evidence hash changed since acquisition: {}", segment.filename));
+        }
+        if !segment.md5.is_empty() && !segment.md5.eq_ignore_ascii_case(&source_hash.md5) {
+            return Err(format!("Evidence MD5 changed since acquisition: {}", segment.filename));
+        }
+        segment_paths.push(segment_path);
+        manifest_segments.push(serde_json::json!({
+            "filename": segment.filename,
+            "camera_channel": segment.camera_channel,
+            "tier_used": segment.tier_used,
+            "timestamp_start": segment.timestamp_start,
+            "timestamp_end": segment.timestamp_end,
+            "sha256": source_hash.sha256,
+            "md5": source_hash.md5,
+            "frame_count": segment.frame_count,
+            "is_deleted": segment.is_deleted,
+            "size_bytes": source_hash.size_bytes,
+        }));
+    }
+    manifest_json["carved_segments"] = serde_json::Value::Array(manifest_segments);
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest_json).map_err(|e| e.to_string())?;
+    fs::write(&manifest_p, manifest_bytes).map_err(|e| e.to_string())?;
+
+    let count = segment_paths.len() as u32;
+
+    let api_base_url_clone = api_base_url.clone();
+    let manifest_p_buf = manifest_p.clone();
+    let platform_jwt_clone = platform_jwt.clone();
+
+    let uploaded_case_id = tokio::task::spawn_blocking(move || {
+        sentinel_carver::api_client::upload_evidence(
+            &api_base_url_clone,
+            &manifest_p_buf,
+            &segment_paths,
+            Some(&platform_jwt_clone),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task execution error: {}", e))?
+    .map_err(|e| format!("Evidence upload failed: {}", e))?;
+
+    let mut local_cleanup_complete = true;
+    let carved_output_root = if output_dir.trim().is_empty() {
+        None
+    } else {
+        Path::new(&output_dir).canonicalize().ok()
+    };
+    let preview_cache_root = app.path().app_cache_dir().ok().and_then(|path| path.canonicalize().ok());
+    for segment in &segments {
+        if segment.source == "carved" {
+            let source_path = Path::new(&segment.local_path);
+            match (carved_output_root.as_ref(), source_path.canonicalize()) {
+                (Some(output_root), Ok(path)) if path.starts_with(output_root) => {
+                    if fs::remove_file(path).is_err() {
+                        local_cleanup_complete = false;
+                    }
+                }
+                _ => local_cleanup_complete = false,
+            }
+        }
+
+        if let Some(preview_path) = segment.preview_path.as_deref() {
+            match (preview_cache_root.as_ref(), Path::new(preview_path).canonicalize()) {
+                (Some(cache_root), Ok(path)) if path.starts_with(cache_root) => {
+                    if fs::remove_file(path).is_err() {
+                        local_cleanup_complete = false;
+                    }
+                }
+                _ => local_cleanup_complete = false,
             }
         }
     }
 
-    let count = segment_paths.len() as u32;
-
-    sentinel_carver::api_client::upload_evidence(
-        &api_base_url,
-        manifest_p,
-        &segment_paths,
-        Some(&platform_jwt),
-    )
-    .map_err(|e| format!("Evidence upload failed: {}", e))?;
-
     let duration = start_time.elapsed().as_secs_f64();
-    let case_id = manifest_json["case_id"].as_str().unwrap_or("").to_string();
-    let platform_url = std::env::var("SENTINELFS_PLATFORM_URL")
-        .unwrap_or_else(|_| "https://sentinelfs.app".to_string());
-    let case_url = format!("{}/cases/{}", platform_url.trim_end_matches('/'), case_id);
+    let dashboard_url = std::env::var("VITE_WEB_DASHBOARD_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let case_url = format!("{}/cases/{}", dashboard_url.trim_end_matches('/'), uploaded_case_id);
 
     Ok(UploadResult {
         success: true,
         case_url,
         segments_uploaded: count,
         upload_duration_sec: duration,
+        local_cleanup_complete,
     })
 }

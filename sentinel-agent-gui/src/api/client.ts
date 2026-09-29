@@ -26,9 +26,12 @@ export const api = {
     // Web browser fallback
     const claim_token = crypto.randomUUID();
     const case_id = crypto.randomUUID();
-    const platform_url = localStorage.getItem('sentinelfs_platform_url') || 'http://localhost:8000';
-    const claim_url = `${platform_url}/claim/${claim_token}`;
+    const platform_url = (import.meta.env as any).VITE_API_BASE_URL || localStorage.getItem('sentinelfs_platform_url') || 'http://localhost:8000';
+    const dashboard_url = (import.meta.env as any).VITE_WEB_DASHBOARD_URL || localStorage.getItem('sentinelfs_dashboard_url') || 'http://localhost:3000';
+    const claim_url = `${dashboard_url.replace(/\/$/, '')}/claim/${claim_token}`;
     const generated_at = new Date().toISOString();
+
+
 
     // Register token with local backend server if reachable
     try {
@@ -175,6 +178,13 @@ export const api = {
     };
   },
 
+  prepareVideoPreview: async (filePath: string): Promise<string | null> => {
+    if (isTauriEnv()) {
+      return invoke<string | null>('prepare_video_preview', { filePath });
+    }
+    return null;
+  },
+
   probeVideo: async (filePath: string): Promise<VideoProbeResult> => {
     if (isTauriEnv()) {
       return invoke<VideoProbeResult>('probe_video', { filePath });
@@ -202,7 +212,10 @@ export const api = {
     manifestPath: string,
     outputDir: string,
     apiBaseUrl: string,
-    platformJwt: string
+    platformJwt: string,
+    caseId: string,
+    caseReference: string,
+    segments: CarvedSegmentUI[]
   ): Promise<UploadResult> => {
     if (isTauriEnv()) {
       return invoke<UploadResult>('upload_evidence', {
@@ -210,34 +223,12 @@ export const api = {
         outputDir,
         apiBaseUrl,
         platformJwt,
+        caseId,
+        caseReference,
+        segments,
       });
     }
 
-    // Browser upload via fetch API
-    const formData = new FormData();
-    const manifestBlob = new Blob([JSON.stringify({ case_id: 'browser-case-id', segments: [] })], {
-      type: 'application/json',
-    });
-    formData.append('manifest', manifestBlob, 'manifest.json');
-
-    const res = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/api/v1/evidence/ingest`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${platformJwt}`,
-      },
-      body: formData,
-    });
-
-    if (!res.ok) {
-      throw new Error(`Upload failed with HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    return {
-      success: true,
-      case_url: `${apiBaseUrl}/cases/${data.case_id || 'browser-case'}`,
-      segments_uploaded: 2,
-      upload_duration_sec: 1.2,
-    };
+    throw new Error('Uploading selected local files requires the SentinelFS desktop agent.');
   },
 };

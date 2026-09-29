@@ -1,15 +1,15 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, ArrowRight, Settings, AlertCircle } from 'lucide-react';
+import { Shield, ArrowRight, Settings, AlertCircle, CheckCircle2, LogOut, KeyRound } from 'lucide-react';
 import { api } from '../api/client';
 import { useCaseStore } from '../store/caseStore';
 import { StepBar } from '../components/StepBar';
 
 export const Welcome: React.FC = () => {
   const navigate = useNavigate();
-  const { setSession, setPlatformUrl, platformUrl } = useCaseStore();
+  const { setSession, setPlatformUrl, platformUrl, persistentAuth, logoutPersistentAuth } = useCaseStore();
 
-  const [operatorName, setOperatorName] = useState('');
+  const [operatorName, setOperatorName] = useState(persistentAuth?.username || '');
   const [caseReference, setCaseReference] = useState('');
   const [customPlatformUrl, setCustomPlatformUrl] = useState(platformUrl || 'http://localhost:8000');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -29,20 +29,26 @@ export const Welcome: React.FC = () => {
       setPlatformUrl(customPlatformUrl.trim());
       const res = await api.generateClaimToken(operatorName.trim(), caseReference.trim());
 
+      const sessionJwt = persistentAuth?.jwt || null;
+
       setSession({
         operator_name: operatorName.trim(),
         case_reference: caseReference.trim(),
         case_id: res.case_id,
         claim_token: res.claim_token,
         claim_url: res.claim_url,
-        platform_jwt: null,
+        platform_jwt: sessionJwt,
         output_dir: '',
         flow: 'carving',
-        step: 1,
+        step: sessionJwt ? 3 : 1,
       });
 
-      // Claim & Link Session ALWAYS comes first (Step 2)
-      navigate('/claim');
+      // If already authenticated persistently (like Playit device link), skip QR claim!
+      if (sessionJwt) {
+        navigate('/drive');
+      } else {
+        navigate('/claim');
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -60,7 +66,7 @@ export const Welcome: React.FC = () => {
             <div className="p-3 bg-blue-600/20 border border-blue-500/30 rounded-sm text-blue-400">
               <Shield className="w-8 h-8" />
             </div>
-            <div>
+            <div className="flex-1">
               <h1 className="text-2xl font-bold text-slate-100 tracking-tight">
                 SentinelFS Agent GUI
               </h1>
@@ -69,6 +75,38 @@ export const Welcome: React.FC = () => {
               </p>
             </div>
           </div>
+
+          {/* Persistent Authentication Banner */}
+          {persistentAuth ? (
+            <div className="bg-emerald-950/40 border border-emerald-500/40 p-4 rounded-sm flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+                <div>
+                  <div className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
+                    Persistent Platform Connection Active
+                  </div>
+                  <div className="text-xs text-slate-300 mt-0.5">
+                    Authenticated as <span className="font-semibold text-white">{persistentAuth.username}</span> — New cases will auto-link to this account without re-authenticating.
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={logoutPersistentAuth}
+                className="flex items-center space-x-1.5 text-xs text-slate-400 hover:text-red-400 bg-[#0f1117] border border-[#2d3148] px-3 py-1.5 rounded-sm transition-colors"
+                title="Disconnect Account / Switch Investigator"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Disconnect</span>
+              </button>
+            </div>
+          ) : (
+            <div className="bg-amber-950/30 border border-amber-500/30 p-4 rounded-sm flex items-center space-x-3">
+              <KeyRound className="w-5 h-5 text-amber-400 flex-shrink-0" />
+              <div className="text-xs text-amber-200">
+                <strong>Device Not Linked:</strong> You will be guided through a one-time platform claim link (QR / Web browser) on Step 2. Once linked, authentication will persist for future sessions.
+              </div>
+            </div>
+          )}
 
           {error && (
             <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-sm flex items-center space-x-3 text-sm">
@@ -135,7 +173,9 @@ export const Welcome: React.FC = () => {
               onClick={handleStartSession}
               className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-xs px-6 py-3 rounded-sm flex items-center space-x-2 shadow-lg shadow-blue-600/20 transition-all"
             >
-              <span>Initialize Case & Generate Claim Token</span>
+              <span>
+                {persistentAuth ? 'Initialize Case & Proceed to Acquisition' : 'Initialize Case & Generate Claim Token'}
+              </span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>

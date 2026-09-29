@@ -7,13 +7,20 @@ import { Carving } from './pages/Carving';
 import { Preview } from './pages/Preview';
 import { ManualUpload } from './pages/ManualUpload';
 import { ClaimUpload } from './pages/ClaimUpload';
+import { DeviceLinkPage } from './pages/DeviceLinkPage';
+import { useCaseStore } from './store/caseStore';
 
 export const App: React.FC = () => {
+  const { persistentAuth } = useCaseStore();
+
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<Welcome />} />
-        {/* Step 2: Claim & Link Session FIRST */}
+        {/* If device is not linked yet, default page is Device Pairing */}
+        <Route path="/" element={persistentAuth ? <Welcome /> : <DeviceLinkPage />} />
+        <Route path="/link-device" element={<DeviceLinkPage />} />
+        <Route path="/case-setup" element={<Welcome />} />
+        {/* Step 2: Claim & Link Session */}
         <Route path="/claim" element={<ClaimLinkStep />} />
         {/* Carving flow */}
         <Route path="/drive" element={<DriveSelect />} />

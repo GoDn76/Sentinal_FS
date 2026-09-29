@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, QrCode, HardDrive, Cpu, CloudUpload, Film } from 'lucide-react';
+import { ShieldCheck, HardDrive, Cpu, CloudUpload, Film } from 'lucide-react';
 
 interface StepBarProps {
   currentStep: number;
@@ -9,14 +9,13 @@ interface StepBarProps {
 export const StepBar: React.FC<StepBarProps> = ({ currentStep, flow = 'carving' }) => {
   const steps = [
     { num: 1, label: 'Case Setup', icon: ShieldCheck },
-    { num: 2, label: 'Link Session', icon: QrCode },
     flow === 'carving'
-      ? { num: 3, label: 'Select Storage', icon: HardDrive }
-      : { num: 3, label: 'Select Files', icon: Film },
+      ? { num: 2, label: 'Select Storage', icon: HardDrive }
+      : { num: 2, label: 'Select Files', icon: Film },
     flow === 'carving'
-      ? { num: 4, label: 'Forensic Carving', icon: Cpu }
-      : { num: 4, label: 'File Hashing', icon: Cpu },
-    { num: 5, label: 'Preview & Upload', icon: CloudUpload },
+      ? { num: 3, label: 'Forensic Carving', icon: Cpu }
+      : { num: 3, label: 'File Hashing', icon: Cpu },
+    { num: 4, label: 'Preview & Upload', icon: CloudUpload },
   ];
 
   return (

@@ -77,7 +77,7 @@ impl Carver for HikvisionCarver {
             }
 
             // 3. Open output file for carved stream
-            let filename = format!("recovered_hik_stream_{:03}.mp4", stream_idx);
+            let filename = format!("recovered_hik_stream_{:03}.mpg", stream_idx);
             let file_path = output_dir.join(&filename);
             let file = File::create(file_path)?;
             let mut writer = BufWriter::new(file);

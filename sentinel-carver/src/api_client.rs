@@ -3,12 +3,17 @@ use reqwest::blocking::Client;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(serde::Deserialize)]
+struct UploadResponse {
+    case_id: String,
+}
+
 pub fn upload_evidence(
     api_url:       &str,
     manifest_path: &Path,
     segment_paths: &[PathBuf],
     bearer_token:  Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     let mut form = Form::new();
 
     let manifest_bytes = fs::read(manifest_path)?;
@@ -47,5 +52,6 @@ pub fn upload_evidence(
         return Err(format!("API Upload Failed with HTTP {}: {}", status, text).into());
     }
 
-    Ok(())
+    let upload_response: UploadResponse = response.json()?;
+    Ok(upload_response.case_id)
 }

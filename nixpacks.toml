@@ -2,7 +2,7 @@
 # python311Packages.pip added explicitly -- the python311 nix package alone doesn't
 # reliably put a standalone "pip" binary on PATH, which is what caused
 # "pip: command not found" (exit 127) in the last build.
-nixPkgs = ["python311", "python311Packages.pip", "gcc", "zlib"]
+nixPkgs = ["python311", "python311Packages.pip", "gcc", "zlib", "ffmpeg"]
 
 [phases.install]
 cmds = [

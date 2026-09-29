@@ -37,7 +37,8 @@ MAX_FRAMES = int(os.environ.get("FORENSIC_MAX_FRAMES", "200"))
 JOB_TTL_SECONDS = int(os.environ.get("FORENSIC_JOB_TTL", str(6 * 3600)))
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
-VIDEO_EXT = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".ts"}
+VIDEO_EXT = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".ts",
+             ".dav", ".h264", ".dvr", ".raw"}
 
 
 def _load_api_keys() -> set:
@@ -204,7 +205,23 @@ def _run_fusion(job_id, input_path, params):
             min_region_score=params["min_region_score"],
         )
         files = sorted(os.listdir(outdir)) if os.path.isdir(outdir) else []
-        _set(job_id, status="done", report=report, files=files,
+
+        # Inline attribution.json content so the backend never has to
+        # make a second HTTP call to retrieve chain-of-custody data.
+        attribution_inline = None
+        attr_path = os.path.join(outdir, "attribution.json")
+        if os.path.isfile(attr_path):
+            try:
+                with open(attr_path) as f:
+                    attribution_inline = json.load(f)
+            except Exception:
+                pass
+
+        _set(job_id,
+             status="done",
+             report=report,
+             attribution=attribution_inline,
+             files=files,
              seconds=round(time.time() - t0, 2),
              finished_utc=datetime.now(timezone.utc).isoformat())
     except Exception as e:
@@ -224,6 +241,119 @@ def _reap_old_jobs():
         shutil.rmtree(_job_dir(j), ignore_errors=True)
 
 
+def run_full_pipeline(job_id, case_id, segment_files, camera_channel=0):
+    """
+    Executes full SentinelFS ML Pipeline:
+    Pipeline A (YOLOv11 person detection, ByteTrack tracking, OSNet Re-ID)
+    + Pipeline B (Face landmarking, NAFNet denoising, Laplacian Pyramid Fusion, ArcFace embedding).
+    """
+    outdir = os.path.join(_job_dir(job_id), "out")
+    os.makedirs(outdir, exist_ok=True)
+
+    # 1. Run Pipeline A (Person & Vehicle Detection + Tracking + Re-ID)
+    pipeline_a_res = {}
+    try:
+        from pipeline_a_person_tracker import run_pipeline_a
+        first_video = segment_files[0] if segment_files else ""
+        if os.path.isfile(first_video):
+            pipeline_a_res = run_pipeline_a(first_video, camera_channel=camera_channel)
+    except Exception as e:
+        pipeline_a_res = {"error": f"Pipeline A execution failed: {e}"}
+
+    # 2. Run Pipeline B (Face Fusion & ArcFace Re-embedding)
+    input_path = segment_files[0] if len(segment_files) == 1 else _job_dir(job_id)
+    from face_fusion_v2 import reconstruct
+    report = reconstruct(
+        input_path, outdir,
+        max_images=MAX_FRAMES,
+        denoiser_checkpoint=(ENGINE.checkpoint if ENGINE.ready else None),
+        pose_tol=20.0,
+        weights=None,
+        min_region_score=0.25,
+    )
+
+    embeddings = report.get("embeddings", {})
+
+    return {
+        "job_id": job_id,
+        "case_id": case_id,
+        "camera_channel": camera_channel,
+        "status": "done",
+        "pipeline_a": pipeline_a_res,
+        "detections": pipeline_a_res.get("detections", []),
+        "track_ids": [t.get("track_id") for t in pipeline_a_res.get("track_summaries", [])],
+        "person_embeddings": pipeline_a_res.get("person_embeddings", []),
+        "vehicle_features": pipeline_a_res.get("vehicle_features", []),
+        "embeddings": (
+            [embeddings.get("raw_embedding")] if embeddings.get("raw_embedding") else []
+        ),
+        "restored_embeddings": (
+            [embeddings.get("restored_embedding")] if embeddings.get("restored_embedding") else []
+        ),
+        "restoration_quality": [report.get("attribution", {})],
+        "attribution": report,
+        "bsa_compliance": report.get("no_hallucination"),
+    }
+
+
+def ml_worker_loop():
+    """
+    Redis Stream ML Worker Loop.
+    Reads from 'sentinelfs:analysis:jobs' via consumer group 'ml-workers',
+    executes full pipeline, and writes output to 'sentinelfs:analysis:results'.
+    """
+    try:
+        import redis
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+        r = redis.from_url(redis_url)
+        try:
+            r.xgroup_create("sentinelfs:analysis:jobs", "ml-workers", id="0", mkstream=True)
+        except Exception:
+            pass  # Group exists
+
+        print("[ml-worker] Listening for jobs on Redis Stream sentinelfs:analysis:jobs ...", flush=True)
+
+        while True:
+            try:
+                messages = r.xreadgroup(
+                    "ml-workers", "ml-worker-1",
+                    {"sentinelfs:analysis:jobs": ">"},
+                    count=1, block=10000
+                )
+                if not messages:
+                    continue
+
+                for stream, entries in messages:
+                    for msg_id, data in entries:
+                        job_id = data[b"job_id"].decode("utf-8")
+                        case_id = data[b"case_id"].decode("utf-8")
+                        files = json.loads(data[b"segment_files"].decode("utf-8"))
+                        channel = int(data[b"camera_channel"].decode("utf-8"))
+
+                        print(f"[ml-worker] Processing job {job_id} for case {case_id}...", flush=True)
+                        try:
+                            res = run_full_pipeline(job_id, case_id, files, channel)
+                            r.xadd("sentinelfs:analysis:results", {
+                                "job_id": job_id,
+                                "status": "done",
+                                "payload": json.dumps(_json_safe(res)),
+                            })
+                            print(f"[ml-worker] Job {job_id} complete. Results pushed.", flush=True)
+                        except Exception as e:
+                            r.xadd("sentinelfs:analysis:results", {
+                                "job_id": job_id,
+                                "status": "error",
+                                "error": str(e),
+                            })
+                            print(f"[ml-worker] Job {job_id} error: {e}", flush=True)
+                        finally:
+                            r.xack("sentinelfs:analysis:jobs", "ml-workers", msg_id)
+            except Exception as loop_e:
+                time.sleep(5)
+    except Exception as e:
+        print(f"[ml-worker-notice] Redis stream worker not started ({e}). Standing by for HTTP jobs.", flush=True)
+
+
 # --------------------------------------------------------------------------- app
 
 from contextlib import asynccontextmanager
@@ -233,6 +363,8 @@ from contextlib import asynccontextmanager
 async def _lifespan(app_):
     os.makedirs(JOB_ROOT, exist_ok=True)
     ENGINE.load(MODEL_PATH)
+    t = threading.Thread(target=ml_worker_loop, daemon=True)
+    t.start()
     yield
     POOL.shutdown(wait=False)
 
@@ -375,6 +507,140 @@ async def reconstruct_endpoint(
             "poll": f"/v1/jobs/{job_id}", "files_received": len(saved)}
 
 
+from pydantic import BaseModel
+from typing import List, Optional
+import httpx
+
+class AnalysisRequest(BaseModel):
+    job_id:       str
+    case_id:      str
+    segment_files: List[str]   # absolute paths on disk, not uploads
+    callback_url: Optional[str] = None   # backend will POST to this when done
+
+
+@app.post("/v1/analyze", status_code=status.HTTP_202_ACCEPTED)
+async def analyze_endpoint(req: AnalysisRequest, _: str = Depends(require_key)):
+    """
+    JSON contract endpoint for the SentinelFS FastAPI backend.
+    Accepts a list of already-carved segment file paths (no upload needed).
+    Sends results back to callback_url via async HTTP POST when done.
+    """
+    _reap_old_jobs()
+
+    # Validate every file exists and has an acceptable extension
+    for path in req.segment_files:
+        if not os.path.isfile(path):
+            raise HTTPException(400, f"File not found on disk: {path}")
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in IMAGE_EXT | VIDEO_EXT:
+            raise HTTPException(415, f"Unsupported extension: {path}")
+
+    job_id = req.job_id   # use the backend's job_id, not a new one
+    jd = _job_dir(job_id)
+    os.makedirs(jd, exist_ok=True)
+
+    # If multiple segments, use a folder; if one video, use it directly
+    if len(req.segment_files) == 1:
+        input_path = req.segment_files[0]
+    else:
+        # All must be images if multiple — link them into a temp folder
+        updir = os.path.join(jd, "input")
+        os.makedirs(updir, exist_ok=True)
+        for src in req.segment_files:
+            dst = os.path.join(updir, os.path.basename(src))
+            if not os.path.exists(dst):
+                try:
+                    os.symlink(src, dst)
+                except Exception:
+                    shutil.copy2(src, dst)
+        input_path = updir
+
+    # Parse camera channel from first segment filename
+    import re
+    channel_match = re.search(r'(?:cam|camera)[_\-]?(\d+)', req.segment_files[0], re.I)
+    camera_channel = int(channel_match.group(1)) if channel_match else 0
+
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "id":             job_id,
+            "case_id":        req.case_id,
+            "camera_channel": camera_channel,
+            "status":         "queued",
+            "segment_files":  req.segment_files,
+            "callback_url":   req.callback_url,
+            "created_utc":    datetime.now(timezone.utc).isoformat(),
+            "created_ts":     time.time(),
+        }
+
+    params = {
+        "max_images":       MAX_FRAMES,
+        "pose_tol":         20.0,
+        "min_region_score": 0.25,
+        "use_denoiser":     True,
+        "camera_channel":   camera_channel,
+        "callback_url":     req.callback_url,
+    }
+    POOL.submit(_run_fusion_and_callback, job_id, input_path, params)
+
+    return {
+        "job_id":  job_id,
+        "status":  "queued",
+        "poll":    f"/v1/jobs/{job_id}",
+        "files_received": len(req.segment_files),
+    }
+
+
+def _run_fusion_and_callback(job_id, input_path, params):
+    """Runs fusion then POSTs structured results to callback_url if set."""
+    _run_fusion(job_id, input_path, params)
+
+    callback_url = params.get("callback_url")
+    if not callback_url:
+        return
+
+    with JOBS_LOCK:
+        job = dict(JOBS.get(job_id, {}))
+
+    if job.get("status") != "done":
+        return
+
+    report      = job.get("report", {})
+    attribution = job.get("attribution", {})
+    embeddings  = report.get("embeddings", {})
+
+    payload = {
+        "job_id":              job_id,
+        "case_id":             job.get("case_id"),
+        "camera_channel":      job.get("camera_channel", 0),
+        "status":              "done",
+        "detections":          [],          # populated by Pipeline A
+        "track_ids":           [],          # populated by Pipeline A
+        "embeddings":          (
+            [embeddings.get("raw_embedding")]
+            if embeddings.get("raw_embedding") else []
+        ),
+        "restored_embeddings": (
+            [embeddings.get("restored_embedding")]
+            if embeddings.get("restored_embedding") else []
+        ),
+        "restoration_quality": [attribution.get("attribution", {})],
+        "attribution":         attribution,
+        "processing_time_sec": job.get("seconds", 0.0),
+        "bsa_compliance":      report.get("no_hallucination"),
+        "checkpoint_sha256":   (attribution or {}).get("denoiser", {}) and
+                               (attribution.get("denoiser") or {}).get("checkpoint_sha256"),
+    }
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            r = client.post(callback_url, json=_json_safe(payload))
+            _set(job_id, callback_status=r.status_code)
+            print(f"[callback] POST {callback_url} → {r.status_code}")
+    except Exception as e:
+        _set(job_id, callback_error=str(e))
+        print(f"[callback] POST {callback_url} failed: {e}")
+
+
 @app.get("/v1/jobs/{job_id}")
 def job_status(job_id: str, _: str = Depends(require_key)):
     with JOBS_LOCK:
@@ -384,7 +650,9 @@ def job_status(job_id: str, _: str = Depends(require_key)):
     out = dict(job)
     out.pop("created_ts", None)
     if job.get("status") == "done":
-        out["artifacts"] = {n: f"/v1/jobs/{job_id}/files/{n}" for n in job.get("files", [])}
+        out["artifacts"] = {n: f"/v1/jobs/{job_id}/files/{n}"
+                            for n in job.get("files", [])}
+        # attribution already inlined — no separate fetch needed
     return _json_safe(out)
 
 

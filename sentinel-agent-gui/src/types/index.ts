@@ -40,6 +40,7 @@ export interface CarvedSegmentUI {
   is_deleted: boolean;
   size_bytes: number;
   local_path: string;
+  preview_path?: string | null;
   can_preview: boolean;
   source: 'carved' | 'manual';
 }
@@ -85,4 +86,5 @@ export interface UploadResult {
   case_url: string;
   segments_uploaded: number;
   upload_duration_sec: number;
+  local_cleanup_complete: boolean;
 }

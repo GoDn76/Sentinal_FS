@@ -5,7 +5,7 @@
   "identifier": "com.sentinelfs.agent.gui",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -16,15 +16,18 @@
         "width": 1280,
         "height": 850,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": true,
+        "devtools": true
       }
     ],
     "security": {
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$DOCUMENT/**",
+          "**",
           "$DOWNLOAD/**",
+          "$DOCUMENT/**",
           "$DESKTOP/**",
           "$HOME/SentinelFS/**"
         ]

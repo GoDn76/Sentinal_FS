@@ -1,13 +1,16 @@
 import React, { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Copy, Check, ExternalLink } from 'lucide-react';
+import { open as openShell } from '@tauri-apps/plugin-shell';
+import { isTauriEnv } from '../api/client';
 
 interface ClaimLinkBoxProps {
   claimUrl: string;
   claimToken: string;
+  onOpenExternalUrl?: () => void;
 }
 
-export const ClaimLinkBox: React.FC<ClaimLinkBoxProps> = ({ claimUrl, claimToken }) => {
+export const ClaimLinkBox: React.FC<ClaimLinkBoxProps> = ({ claimUrl, claimToken, onOpenExternalUrl }) => {
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
 
@@ -21,6 +24,24 @@ export const ClaimLinkBox: React.FC<ClaimLinkBoxProps> = ({ claimUrl, claimToken
     navigator.clipboard.writeText(claimToken);
     setCopiedToken(true);
     setTimeout(() => setCopiedToken(false), 2000);
+  };
+
+  const handleLinkClick = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (onOpenExternalUrl) {
+      onOpenExternalUrl();
+      return;
+    }
+
+    if (isTauriEnv()) {
+      try {
+        await openShell(claimUrl);
+        return;
+      } catch (err) {
+        console.warn('Tauri openShell failed:', err);
+      }
+    }
+    window.open(claimUrl, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -42,7 +63,11 @@ export const ClaimLinkBox: React.FC<ClaimLinkBoxProps> = ({ claimUrl, claimToken
             Claim URL:
           </label>
           <div className="flex items-center space-x-2 bg-[#0f1117] border border-[#2d3148] px-3 py-2 rounded-sm">
-            <span className="font-mono text-xs text-blue-400 truncate flex-1" title={claimUrl}>
+            <span
+              onClick={handleLinkClick}
+              className="font-mono text-xs text-blue-400 hover:underline cursor-pointer truncate flex-1"
+              title={claimUrl}
+            >
               {claimUrl}
             </span>
             <button
@@ -52,15 +77,13 @@ export const ClaimLinkBox: React.FC<ClaimLinkBoxProps> = ({ claimUrl, claimToken
             >
               {copiedUrl ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
             </button>
-            <a
-              href={claimUrl}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              onClick={handleLinkClick}
               className="text-slate-400 hover:text-blue-400 transition-colors p-1 rounded hover:bg-[#2d3148]"
-              title="Open link"
+              title="Open in Native Web Browser (Chrome/Edge)"
             >
               <ExternalLink className="w-4 h-4" />
-            </a>
+            </button>
           </div>
         </div>
 
@@ -84,7 +107,7 @@ export const ClaimLinkBox: React.FC<ClaimLinkBoxProps> = ({ claimUrl, claimToken
       </div>
 
       <p className="text-xs text-slate-400 text-center leading-relaxed border-t border-[#2d3148] pt-4">
-        Scan this QR code or open the URL in any browser to link your SentinelFS web platform account to this investigation session.
+        Scan this QR code or click the URL to open your system&apos;s native web browser and grant access to this investigation unit.
       </p>
     </div>
   );

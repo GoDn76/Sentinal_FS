@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
 import { HardDrive, FolderOpen, ArrowRight, ArrowLeft, RefreshCw, AlertCircle } from 'lucide-react';
 import { api } from '../api/client';
 import { useCaseStore } from '../store/caseStore';
@@ -9,7 +9,8 @@ import type { DriveInfo } from '../types';
 
 export const DriveSelect: React.FC = () => {
   const navigate = useNavigate();
-  const { session, setSession } = useCaseStore();
+  const { session, setSession, setSelectedDrive } = useCaseStore();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [drives, setDrives] = useState<DriveInfo[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -35,44 +36,101 @@ export const DriveSelect: React.FC = () => {
     fetchDrives();
   }, []);
 
-  const handleCardClick = async (drive: DriveInfo) => {
-    if (drive.path === 'FILE_PICKER') {
+  // Native OS File Picker Handler with Web Browser Fallback
+  const handleSelectDiskImage = async () => {
+    let handledInTauri = false;
+
+    if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
       try {
-        const selected = await open({
+        const selected = await openFileDialog({
           multiple: false,
           filters: [
-            { name: 'Disk Images & Evidence', extensions: ['raw', 'dd', 'img', 'e01', 'dav', 'h264', 'bin'] },
+            {
+              name: 'Forensic Disk Images & Videos',
+              extensions: ['raw', 'dd', 'img', 'iso', 'e01', 'dav', 'h264', 'bin', 'mp4', 'mkv', 'avi', 'mov'],
+            },
+            {
+              name: 'All Files',
+              extensions: ['*'],
+            },
           ],
         });
 
-        if (selected && typeof selected === 'string') {
-          setCustomFilePath(selected);
-          setSelectedPath(selected);
+        if (selected) {
+          const pathStr = Array.isArray(selected) ? selected[0] : (selected as string);
+          setCustomFilePath(pathStr);
+          setSelectedPath(pathStr);
+          setSelectedDrive({
+            path: pathStr,
+            label: `Disk Image: ${pathStr.split(/[/\\]/).pop()}`,
+            size_bytes: 0,
+            is_removable: false,
+          });
+          handledInTauri = true;
         }
-      } catch (err: unknown) {
-        console.error('File picker error:', err);
+      } catch (err) {
+        console.warn('Tauri openFileDialog failed, falling back to browser input:', err);
       }
+    }
+
+    if (!handledInTauri) {
+      fileInputRef.current?.click();
+    }
+  };
+
+  const handleBrowserFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const filePath = (file as any).path || file.name;
+      setCustomFilePath(filePath);
+      setSelectedPath(filePath);
+      setSelectedDrive({
+        path: filePath,
+        label: `File: ${file.name}`,
+        size_bytes: file.size,
+        is_removable: false,
+      });
+    }
+  };
+
+  const handleCardClick = async (drive: DriveInfo) => {
+    if (drive.path === 'FILE_PICKER') {
+      await handleSelectDiskImage();
     } else {
       setSelectedPath(drive.path);
+      setSelectedDrive(drive);
     }
   };
 
   const handleProceed = () => {
-    if (!selectedPath || !session) return;
+    if (!selectedPath) return;
 
-    const caseOutputDir = `./carved_evidence_${session.case_id.slice(0, 8)}`;
+    const caseIdToUse = session?.case_id || crypto.randomUUID();
+    const caseOutputDir = `./carved_evidence_${caseIdToUse.slice(0, 8)}`;
 
-    setSession({
-      ...session,
-      output_dir: caseOutputDir,
-      step: 3,
-    });
+    if (session) {
+      setSession({
+        ...session,
+        output_dir: caseOutputDir,
+        step: 3,
+      });
+    }
 
     navigate('/carving', { state: { inputPath: selectedPath, vendorHint } });
   };
 
   return (
     <div className="min-h-screen bg-[#0f1117] flex flex-col">
+      {/* Hidden file input for web browser fallback */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleBrowserFileChange}
+        className="hidden"
+        accept=".raw,.dd,.img,.iso,.e01,.dav,.h264,.bin,.mp4,.mkv,.avi,.mov"
+      />
+
+      {/* Stepper set to Step 2: Select Storage */}
       <StepBar currentStep={2} flow="carving" />
 
       <main className="flex-1 max-w-5xl w-full mx-auto p-8 space-y-6">
@@ -141,7 +199,7 @@ export const DriveSelect: React.FC = () => {
 
                     <p className="text-xs font-mono text-slate-400 mt-1 truncate">
                       {isFilePicker
-                        ? customFilePath || 'Click to select disk image (.raw, .dd, .img)'
+                        ? customFilePath || 'Click to select disk image (.raw, .dd, .img, .e01, .dav)'
                         : drive.path}
                     </p>
 
@@ -173,7 +231,7 @@ export const DriveSelect: React.FC = () => {
 
         <div className="flex items-center justify-between pt-4 border-t border-[#2d3148]">
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate('/case-setup')}
             className="flex items-center space-x-2 text-slate-400 hover:text-white text-xs px-4 py-2.5 rounded-sm transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -193,3 +251,4 @@ export const DriveSelect: React.FC = () => {
     </div>
   );
 };
+

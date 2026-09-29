@@ -8,6 +8,7 @@ use crate::carvers::CarvedSegment;
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct EvidenceManifest {
     pub evidence_id:             Uuid,
+    pub case_id:                 String,
     pub source_path:             String,
     pub source_sha256:           String,
     pub source_md5:              String,
@@ -20,6 +21,7 @@ pub struct EvidenceManifest {
 
 impl EvidenceManifest {
     pub fn new(
+        case_id: String,
         source_path: String,
         source_sha256: String,
         source_md5: String,
@@ -34,6 +36,7 @@ impl EvidenceManifest {
 
         Self {
             evidence_id: Uuid::new_v4(),
+            case_id,
             source_path,
             source_sha256,
             source_md5,

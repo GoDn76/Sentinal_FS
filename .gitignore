@@ -5,25 +5,48 @@
 # Ignore target directories in any un-ignored subdirectories
 target/
 test_evidence/
-<<<<<<< HEAD
 .env
 .env.local
 .venv/
 node_modules/
-build_dahua_disk.py
-build_hikvision_disk.py
-carving_test_dahua.py
 fake_disk.raw
 my_Video.mp4
 output.h264
 output.mp4
 recovered_dahua.dav
-=======
-
 # Local development secrets and generated artifacts
-.env
 venv/
 __pycache__/
 *.pyc
 *.png
->>>>>>> 0597b05d9420680e5981994efe19af5398ac320b
+
+sentinelfs.db
+test_pipeline_report.json
+sealed_case_output/
+test_carve_out/
+scratch/
+reference_repos/
+yolo11n.pt
+CheckVid.mp4
+CheckVid.mpg
+*.raw
+*.dd
+*.e01
+*.dav
+*.h264
+*.mpg
+evidence_vault/
+
+# Generated forensic case data: keep media, manifests, and audit trails local.
+**/carved_evidence_*/
+**/carved_output/
+**/carved_output_*/
+**/test_carve_out/
+Test Raw/
+recovered_*
+generic_nal_stream_*
+*.playback.mp4
+
+# Build outputs and compiled helper binaries are not source code.
+**/dist/
+sentinel-agent-gui/src-tauri/binaries/*.exe

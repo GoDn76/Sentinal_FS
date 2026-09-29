@@ -8,6 +8,9 @@ use commands::*;
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let resource_dir = app.path().resource_dir().unwrap_or_default();
             let binaries_dir = resource_dir.join("binaries");
@@ -30,6 +33,7 @@ fn main() {
             start_carving,
             get_carving_progress,
             get_carved_segments,
+            prepare_video_preview,
             hash_file,
             probe_video,
             extract_preview_thumbnail,

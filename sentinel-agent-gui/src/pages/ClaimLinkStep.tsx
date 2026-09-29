@@ -8,35 +8,63 @@ import { ClaimLinkBox } from '../components/ClaimLinkBox';
 
 export const ClaimLinkStep: React.FC = () => {
   const navigate = useNavigate();
-  const { session, platformUrl, updateJWT, setSession } = useCaseStore();
+  const { session, platformUrl, updateJWT, setSession, setPersistentAuth } = useCaseStore();
 
   const [claimStatus, setClaimStatus] = useState<'pending' | 'claimed' | 'unreachable' | 'expired'>(
     'pending'
   );
   const [claimedBy, setClaimedBy] = useState<string | null>(null);
 
-  // Poll claim status every 3 seconds
+  // Poll claim status every 4 seconds until claimed or expired
   useEffect(() => {
     if (!session?.claim_token) return;
+
+    let isSubscribed = true;
+    let timerId: NodeJS.Timeout;
 
     const poll = async () => {
       try {
         const res = await api.pollClaimStatus(session.claim_token, platformUrl);
-        setClaimStatus(res.status);
+        if (!isSubscribed) return;
 
-        if (res.status === 'claimed' && res.platform_jwt) {
-          setClaimedBy(res.claimed_by);
-          updateJWT(res.platform_jwt);
+        if (res.status === 'claimed') {
+          setClaimStatus('claimed');
+          if (res.platform_jwt) {
+            setClaimedBy(res.claimed_by);
+            updateJWT(res.platform_jwt);
+            setPersistentAuth({
+              jwt: res.platform_jwt,
+              username: res.claimed_by || 'Investigator',
+              linkedAt: new Date().toISOString(),
+            });
+          }
+          return; // Stop polling on success
+        } else if (res.status === 'expired') {
+          setClaimStatus('expired');
+          return; // Stop polling on expiration
+        } else if (res.status === 'pending') {
+          setClaimStatus('pending');
+        } else {
+          setClaimStatus('unreachable');
         }
       } catch (err: unknown) {
-        setClaimStatus('unreachable');
+        if (isSubscribed) {
+          setClaimStatus('unreachable');
+        }
+      }
+
+      if (isSubscribed) {
+        timerId = setTimeout(poll, 4000);
       }
     };
 
     poll();
-    const interval = setInterval(poll, 3000);
-    return () => clearInterval(interval);
-  }, [session?.claim_token, platformUrl, updateJWT]);
+
+    return () => {
+      isSubscribed = false;
+      if (timerId) clearTimeout(timerId);
+    };
+  }, [session?.claim_token, platformUrl, updateJWT, setPersistentAuth]);
 
   if (!session) {
     navigate('/');
